@@ -274,7 +274,7 @@ class TDSConvCTCModule(pl.LightningModule):
         )
 
 
-class TransformerCTCModule(pl.LightningModule):
+class TransformerTDSConvCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
 
@@ -283,7 +283,9 @@ class TransformerCTCModule(pl.LightningModule):
         in_features: int,
         mlp_features: Sequence[int],
         transformer_dropout: float,
-        transformer_heads: Sequence[int],        
+        transformer_heads: Sequence[int],
+        block_channels: Sequence[int],
+        kernel_width: int,
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
         decoder: DictConfig,
@@ -306,9 +308,14 @@ class TransformerCTCModule(pl.LightningModule):
             ),            
             # (T, N, num_features)
             nn.Flatten(start_dim=2),
-            # positional encoding to allow model to learn relative positions
-            SinusoidalPositionalEncoding(num_features),
-            MultiHeadTransformerNetwork(num_features, transformer_dropout, transformer_heads),
+            TDSConvEncoder(
+                num_features=num_features,
+                block_channels=block_channels,
+                kernel_width=kernel_width,
+            ), # conv to observe to local features
+            SinusoidalPositionalEncoding(num_features), # positional encoding to allow model to learn relative positions
+            MultiHeadTransformerNetwork(num_features, transformer_dropout, transformer_heads), # transformer to help attend to global features
+
             # (T, N, num_classes)
             nn.Linear(num_features, charset().num_classes),
             nn.LogSoftmax(dim=-1),

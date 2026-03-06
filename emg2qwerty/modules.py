@@ -335,7 +335,7 @@ class MultiHeadAttentionLayer(nn.Module):
     """
 
     def __init__(self, num_features : int, num_heads : int = 12, dropout : float = 0.0):
-        super().__init__()
+        super().__init__()        
         # with batch_first=False, we can operate on (T, N, C)
         self.attn = nn.MultiheadAttention(num_features, num_heads, dropout, batch_first=False)
     
@@ -385,7 +385,8 @@ class MultiHeadAttentionTransformerLayer(nn.Module):
         self.ln2 = nn.LayerNorm(num_features)
         self.fc_block = nn.Sequential(
             nn.Linear(num_features, 4 * num_features),
-            nn.ReLU(),
+            nn.GELU(),
+            nn.Dropout(dropout),
             nn.Linear(4 * num_features, num_features)
         )
         self.drop2 = nn.Dropout(dropout)
