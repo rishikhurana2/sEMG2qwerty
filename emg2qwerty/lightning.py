@@ -94,8 +94,8 @@ class WindowedEMGDataModule(pl.LightningDataModule):
                     transform=self.test_transform,
                     # Feed the entire session at once without windowing/padding
                     # at test time for more realism
-                    window_length=None,
-                    padding=(0, 0),
+                    window_length=self.window_length,
+                    padding=self.padding,
                     jitter=False,
                 )
                 for hdf5_path in self.test_sessions
@@ -308,14 +308,13 @@ class TransformerTDSConvCTCModule(pl.LightningModule):
             ),            
             # (T, N, num_features)
             nn.Flatten(start_dim=2),
+            SinusoidalPositionalEncoding(num_features), # positional encoding to allow model to learn relative positions
             TDSConvEncoder(
                 num_features=num_features,
                 block_channels=block_channels,
                 kernel_width=kernel_width,
             ), # conv to observe to local features
-            SinusoidalPositionalEncoding(num_features), # positional encoding to allow model to learn relative positions
             MultiHeadTransformerNetwork(num_features, transformer_dropout, transformer_heads), # transformer to help attend to global features
-
             # (T, N, num_classes)
             nn.Linear(num_features, charset().num_classes),
             nn.LogSoftmax(dim=-1),
