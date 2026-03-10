@@ -25,6 +25,7 @@ from emg2qwerty.modules import (
     MultiBandRotationInvariantMLP,
     SpectrogramNorm,
     TDSConvEncoder,
+    LSTMEncoder,
     SingleHeadTransformerNetwork,
     MultiHeadTransformerNetwork,
     SinusoidalPositionalEncoding
@@ -140,7 +141,7 @@ class WindowedEMGDataModule(pl.LightningDataModule):
         )
 
 
-class TDSConvCTCModule(pl.LightningModule):
+class TDSConvLSTMCTCModule(pl.LightningModule):
     NUM_BANDS: ClassVar[int] = 2
     ELECTRODE_CHANNELS: ClassVar[int] = 16
 
@@ -152,13 +153,16 @@ class TDSConvCTCModule(pl.LightningModule):
         kernel_width: int,
         optimizer: DictConfig,
         lr_scheduler: DictConfig,
+        lstm_hidden_size: int,   # Set to 256 as requested
+        lstm_num_layers: int,
+        lstm_dropout: float,     # Added dropout parameter
         decoder: DictConfig,
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
 
         num_features = self.NUM_BANDS * mlp_features[-1]
-
+        lstm_out_features = lstm_hidden_size * 2
         # Model
         # inputs: (T, N, bands=2, electrode_channels=16, freq)
         self.model = nn.Sequential(
@@ -177,8 +181,23 @@ class TDSConvCTCModule(pl.LightningModule):
                 block_channels=block_channels,
                 kernel_width=kernel_width,
             ),
+
+            # LSTM Block with internal dropout
+            LSTMEncoder(
+                num_features=num_features,
+                input_size=num_features,
+                hidden_size=lstm_hidden_size,
+                num_layers=lstm_num_layers,
+                dropout=lstm_dropout,
+                bidirectional=True
+            ),
+            
+            # # Final Dropout before projection
+            # nn.Dropout(p=lstm_dropout),
             # (T, N, num_classes)
             nn.Linear(num_features, charset().num_classes),
+            #nn.Linear(lstm_out_features, charset().num_classes),
+            #nn.LayerNorm(charset().num_classes),
             nn.LogSoftmax(dim=-1),
         )
 

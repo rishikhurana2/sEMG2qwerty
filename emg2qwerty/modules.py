@@ -281,6 +281,38 @@ class TDSConvEncoder(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
 
+class LSTMEncoder(nn.Module):
+    def __init__(
+        self, 
+        num_features: int,
+        input_size: int, 
+        hidden_size: int = 256, 
+        num_layers: int = 3,    
+        dropout: float = 0.3,   
+        bidirectional: bool = True
+    ) -> None:
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            dropout=dropout if num_layers > 1 else 0.0, 
+            bidirectional=bidirectional,
+            batch_first=False
+        )
+        print("Num LSTM layers: ", num_layers)
+        print("Layer size: ", hidden_size)
+
+        out_dim = hidden_size * (2 if bidirectional else 1)
+        self.proj = nn.Linear(out_dim, num_features)
+        self.layer_norm = nn.LayerNorm(num_features)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        output, _ = self.lstm(inputs)
+        x = self.proj(output)
+        x = x + inputs
+        x = self.layer_norm(x)
+ 
 class SinusoidalPositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 20000):
         super().__init__()
