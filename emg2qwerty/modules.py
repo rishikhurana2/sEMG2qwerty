@@ -9,6 +9,8 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 
+import math
+
 
 class SpectrogramNorm(nn.Module):
     """A `torch.nn.Module` that applies 2D batch normalization over spectrogram
@@ -37,7 +39,7 @@ class SpectrogramNorm(nn.Module):
         assert self.channels == bands * C
 
         x = inputs.movedim(0, -1)  # (N, bands=2, C=16, freq, T)
-        x = x.reshape(N, bands * C, freq, T)
+        x = x.reshape(N, bands * C, freq, T) # (N, Channels, freq, T)
         x = self.batch_norm(x)
         x = x.reshape(N, bands, C, freq, T)
         return x.movedim(-1, 0)  # (T, N, bands=2, C=16, freq)
@@ -270,7 +272,7 @@ class TDSConvEncoder(nn.Module):
             ), "block_channels must evenly divide num_features"
             tds_conv_blocks.extend(
                 [
-                    TDSConv2dBlock(channels, num_features // channels, kernel_width),
+                    TDSConv2dBlock(channels, num_features // channels, kernel_width), # width * channels = num_features
                     TDSFullyConnectedBlock(num_features),
                 ]
             )
@@ -279,16 +281,14 @@ class TDSConvEncoder(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
 
-
-
 class LSTMEncoder(nn.Module):
     def __init__(
         self, 
         num_features: int,
         input_size: int, 
-        hidden_size: int = 256,  # Recommended to be between 128 to 512
-        num_layers: int = 3,     # Recommended between 2-4
-        dropout: float = 0.3,    # dropout either 0.2 or 0.3
+        hidden_size: int = 256, 
+        num_layers: int = 3,    
+        dropout: float = 0.3,   
         bidirectional: bool = True
     ) -> None:
         super().__init__()
@@ -296,7 +296,6 @@ class LSTMEncoder(nn.Module):
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            # PyTorch expects dropout to be > 0 only if num_layers > 1
             dropout=dropout if num_layers > 1 else 0.0, 
             bidirectional=bidirectional,
             batch_first=False
@@ -313,4 +312,149 @@ class LSTMEncoder(nn.Module):
         x = self.proj(output)
         x = x + inputs
         x = self.layer_norm(x)
+ 
+class SinusoidalPositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 20000):
+        super().__init__()
+        pos_encoding = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pos_encoding[:, 0::2] = torch.sin(position * div_term)
+        pos_encoding[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer("pe", pos_encoding)  # (max_len, d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T = x.size(0)
+        return x + self.pe[:T].unsqueeze(1)  # (T,1,C)
+
+""" Single head attention layer -- implements the formulas for self-attention """
+class SingleHeadAttentionLayer(nn.Module):
+    """ An attention layer for processing after spectogram normalization and rotation invariant processing
+    
+    Args:
+        num_features (int): dimension of a head for input of size
+        (T, N, num_features)
+    """
+    def __init__(self, num_features: int):
+        super().__init__()
+        self.Wq = nn.Linear(num_features, num_features)
+        self.Wk = nn.Linear(num_features, num_features)
+        self.Wv = nn.Linear(num_features, num_features)
+
+    def forward(self, inputs):
+        T_in, N, C = inputs.shape # C = num_features
+
+        x = inputs.permute(1, 0, 2) # (N, T_in, num_features)
+        
+        Q = self.Wq(x) # (N, T_in, num_features)
+        K = self.Wk(x)
+        V = self.Wv(x)
+
+        # a = softmax(QK^T/sqrt(d))V
+        attention = torch.softmax(torch.matmul(Q, torch.transpose(K, 1, 2)) / math.sqrt(C), dim=2) # (N, T_in, T_in)
+        delta     = torch.matmul(attention, V) # (N, T_in, num_features)
+
+        return delta.permute(1, 0, 2) # (T_in, N, num_features)
+
+""" Multi head attention layer -- uses PyTorch's nuilt in functionality to take full advantage of parallelism"""
+class MultiHeadAttentionLayer(nn.Module):
+    """ A multi-headed attention layer for processing
+    
+    Args: 
+        num_features (int) : total dimension of multi-heading layer
+        num_heads (int) : number of heads for this layer. We have that head_dim = num_features // num_heads
+        dropout (float) : dropout used in training mode (default is 0.0, which is no dropout)
+    """
+
+    def __init__(self, num_features : int, num_heads : int = 12, dropout : float = 0.0):
+        super().__init__()        
+        # with batch_first=False, we can operate on (T, N, C)
+        self.attn = nn.MultiheadAttention(num_features, num_heads, dropout, batch_first=False)
+    
+    def forward(self, inputs):
+        attn_output, _ = self.attn(inputs, inputs, inputs)
+        return attn_output # for self-attention, the q,k,v are all equal to each other
+
+
+
+""" Transformer Block that uses single head attention """
+class SingleHeadAttentionTransformerLayer(nn.Module):
+    """
+        Transformer layer that consists of Attention and fully connected layer
+    """
+
+    def __init__(self, num_features : int):
+        super().__init__()
+
+        self.ln1 = nn.LayerNorm(num_features)
+        self.attn_layer = SingleHeadAttentionLayer(num_features)
+
+        self.ln2 = nn.LayerNorm(num_features)
+        self.fc_block = nn.Sequential(
+            nn.Linear(num_features, 4 * num_features),
+            nn.ReLU(),
+            nn.Linear(4 * num_features, num_features),
+        )
+    
+    def forward(self, x):
+        # normalize + attention (with skip connection)
+        x = x + self.attn_layer(self.ln1(x))
+        
+        # normalize + MLP (with skip connection)
+        x = x + self.fc_block(self.ln2(x))
+
+        return x
+
+""" Transformer Block that uses multi head attention """
+class MultiHeadAttentionTransformerLayer(nn.Module):
+    def __init__(self, num_features : int, num_heads : int = 12, dropout : float = 0.0):
+        super().__init__()
+
+        self.ln1 = nn.LayerNorm(num_features)
+        self.attn_layer = MultiHeadAttentionLayer(num_features, num_heads, dropout)
+        self.drop1 = nn.Dropout(dropout)
+
+        self.ln2 = nn.LayerNorm(num_features)
+        self.fc_block = nn.Sequential(
+            nn.Linear(num_features, 4 * num_features),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(4 * num_features, num_features)
+        )
+        self.drop2 = nn.Dropout(dropout)
+    
+    def forward(self, x):
+        # normalize + attention
+        x = x + self.drop1(self.attn_layer(self.ln1(x)))
+        
+        # normalize + MLP
+        x = x + self.drop2(self.fc_block(self.ln2(x)))
+
+        return x
+
+class SingleHeadTransformerNetwork(nn.Module):
+    def __init__(self, num_layers, num_features):
+        super().__init__()
+
+        self.transformer_list = nn.ModuleList()
+        for _ in range(num_layers):
+            self.transformer_list.append(SingleHeadAttentionTransformerLayer(num_features))
+    
+    def forward(self, x):
+        for transformer in self.transformer_list:
+            x = transformer(x) 
+        return x
+
+class MultiHeadTransformerNetwork(nn.Module):
+    def __init__(self, num_features : int, dropout : float = 0.0, heads : Sequence[int] = (12, 12, 12, 12)):
+        super().__init__()
+        
+        num_layers = len(heads)
+        self.transformer_list = nn.ModuleList()
+        for i in range(num_layers):
+            self.transformer_list.append(MultiHeadAttentionTransformerLayer(num_features, heads[i], dropout))
+        
+    def forward(self, x):
+        for transformer in self.transformer_list:
+            x = transformer(x)
         return x
