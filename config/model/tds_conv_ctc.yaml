@@ -13,11 +13,42 @@
 
 
 # @package _global_
+# Original Configurations
+# module:
+#   _target_: emg2qwerty.lightning.TDSConvCTCModule
+#   in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+#   mlp_features: [384]
+#   block_channels: [24, 24, 24, 24]
+#   kernel_width: 32  # Total temporal receptive field of 125 samples given 4 layers
+
+# LSTM Model yielded the best results
 module:
-  _target_: emg2qwerty.lightning.ResNetCTCModule
-  in_features: 33  # freq only = (n_fft // 2 + 1)
-  optimizer:
-    lr: 0.0003
+  # -- LSTM Configurations --
+  _target_: emg2qwerty.lightning.TDSConvLSTMCTCModule
+  in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+  mlp_features: [384]
+  block_channels: [24, 24, 24]
+  kernel_width: 32
+  lstm_hidden_size: 256
+  lstm_num_layers: 2
+  lstm_dropout: 0.2  
+    
+  # -- Transformer Configurations --
+#   _target_: emg2qwerty.lightning.TransformerTDSConvCTCModule # Change this to change the model. Right now it is using the LSTM-enhanced module (our best one)
+#   in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+#   mlp_features: [384]
+#   block_channels: [24, 24, 24, 24]
+#   kernel_width: 32
+#   transformer_dropout : 0.1
+#   transformer_heads: [24, 24] # 8 transformer layers, each with 12 heads
+
+# -- ResNet Configurations --
+# _target_: emg2qwerty.lightning.ResNetCTCModule
+# in_features: 33  # freq only = (n_fft // 2 + 1)
+# optimizer:
+#   lr: 0.0003
+
+
 
 
 datamodule:
