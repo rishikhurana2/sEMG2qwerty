@@ -1,3 +1,17 @@
+# # @package _global_
+# module:
+#   _target_: emg2qwerty.lightning.TDSConvCTCModule
+#   in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+#   mlp_features: [384]
+#   block_channels: [24, 24, 24, 24]
+#   kernel_width: 32  # Total temporal receptive field of 125 samples given 4 layers
+
+# datamodule:
+#   _target_: emg2qwerty.lightning.WindowedEMGDataModule
+#   window_length: 8000  # 4 sec windows for 2kHz EMG
+#   padding: [1800, 200]  # 900ms past context, 100ms future context
+
+
 # @package _global_
 # Original Configurations
 # module:
@@ -28,10 +42,17 @@ module:
 #   transformer_dropout : 0.1
 #   transformer_heads: [24, 24] # 8 transformer layers, each with 12 heads
 
+# -- ResNet Configurations --
+# _target_: emg2qwerty.lightning.ResNetCTCModule
+# in_features: 33  # freq only = (n_fft // 2 + 1)
+# optimizer:
+#   lr: 0.0003
+
 
 
 
 datamodule:
   _target_: emg2qwerty.lightning.WindowedEMGDataModule
+  batch_size: 32
   window_length: 8000  # 4 sec windows for 2kHz EMG
   padding: [1800, 200]  # 900ms past context, 100ms future context
