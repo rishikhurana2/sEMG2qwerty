@@ -9,6 +9,7 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 
+import torchvision.models as models
 import math
 
 
@@ -281,6 +282,44 @@ class TDSConvEncoder(nn.Module):
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
 
+class ResNet18Model(nn.Module):
+    def __init__(self, channels_in: int, out_features: int):
+        super().__init__()
+        resnet_model = models.resnet18(weights=None)
+		
+        self.conv1 = nn.Conv2d(channels_in, out_channels=64, padding=1, stride=1, bias=False, kernel_size=3)
+        self.bn1 = resnet_model.bn1
+        self.relu = resnet_model.relu
+		
+        self.layer1 = resnet_model.layer1
+        self.layer2 = resnet_model.layer2
+        self.layer3 = resnet_model.layer3
+        self.layer4 = resnet_model.layer4
+
+        self.pooling = nn.AdaptiveAvgPool2d((1,1))
+        self.fc = nn.Linear(512, out_features)
+	
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        T,N,B,C,F = x.shape
+        x = x.reshape(T*N,B,C,F)
+
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        #pooling
+        x = self.pooling(x)
+        x = torch.flatten(x, 1)
+
+        x = self.fc(x)
+
+        return x.reshape(T,N,-1)
+		
 class LSTMEncoder(nn.Module):
     def __init__(
         self, 
